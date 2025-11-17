@@ -864,10 +864,7 @@ public class GameManager implements Listener {
             if (killer != null) {
                 PlayerProfile killerProfile = profiles.get(killer.getUniqueId());
                 if (killerProfile != null && killerProfile.getRole().isZombie()) {
-                    infections.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
-                    player.sendMessage(ChatColor.RED + "곧 감염됩니다. 60초 후 좀비로 부활합니다.");
-                    player.showTitle(Title.title(Component.text("감염 진행", NamedTextColor.DARK_RED), Component.text("1분 뒤 좀비가 됩니다", NamedTextColor.RED)));
-                    player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.6f);
+                    queueZombieInfection(player, profile);
                 } else {
                     applyStun(player);
                 }
@@ -884,6 +881,19 @@ public class GameManager implements Listener {
         player.sendMessage(ChatColor.YELLOW + "자연사로 인해 1분간 기절합니다. 자리를 지키고 부여된 버프로 생존하세요.");
         player.showTitle(Title.title(Component.text("기절!", NamedTextColor.GOLD), Component.text("1분 동안 움직일 수 없습니다", NamedTextColor.YELLOW)));
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 1f, 0.8f);
+    }
+
+    private void queueZombieInfection(Player player, PlayerProfile profile) {
+        UUID uuid = player.getUniqueId();
+        infections.put(uuid, new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
+        if (profile != null && profile.getRole() != Role.ZOMBIE) {
+            profile.setRole(Role.ZOMBIE);
+            syncTeams(profile);
+            profile.applyAttributes();
+        }
+        player.sendMessage(ChatColor.RED + "곧 감염됩니다. 60초 후 좀비로 부활합니다.");
+        player.showTitle(Title.title(Component.text("감염 진행", NamedTextColor.DARK_RED), Component.text("1분 뒤 좀비가 됩니다", NamedTextColor.RED)));
+        player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.6f);
     }
 
     private void applyZombieDown(Player player) {
