@@ -1,6 +1,6 @@
 # Zombie Tag Plugin
 
-Paper 1.20 mini-game 플러그인으로, 요청한 고퀄리티 좀비 술래잡기 모드를 구현했습니다. `/zombietag start`로 게임을 시작하면 서바이벌 모드인 플레이어들이 자동으로 참가하며, 각종 HUD/사운드/추적/부활 시스템이 활성화됩니다.
+Paper 1.21.4 mini-game 플러그인으로, 요청한 고퀄리티 좀비 술래잡기 모드를 구현했습니다. `/zombietag start`로 게임을 시작하면 서바이벌 모드인 플레이어들이 자동으로 참가하며, 각종 HUD/사운드/추적/부활 시스템이 활성화됩니다.
 
 ## 주요 기능
 - **몬스터 스폰 차단**: 자연 몹 스폰을 막아 게임 몰입도를 유지합니다.
@@ -16,7 +16,7 @@ Paper 1.20 mini-game 플러그인으로, 요청한 고퀄리티 좀비 술래잡
 ```bash
 mvn package
 ```
-생성된 `target/zombie-tag-1.0.0-shaded.jar`를 Paper 1.20+ 서버의 `plugins/` 폴더에 넣고 실행하세요.
+생성된 `target/zombie-tag-1.0.0-shaded.jar`를 Paper 1.21.4+ 서버의 `plugins/` 폴더에 넣고 실행하세요.
 
 ## 명령어
 | 명령어 | 설명 | 권한 |

@@ -3,7 +3,7 @@ main: com.text2.zombietag.ZombieTagPlugin
 version: 1.0.0
 author: text2-agent
 description: High quality zombie tag mini-game
-api-version: 1.20
+api-version: 1.21.4
 commands:
   zombietag:
     description: Manage the zombie tag mini-game
