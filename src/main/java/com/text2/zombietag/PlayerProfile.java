@@ -53,13 +53,13 @@ public class PlayerProfile {
             return;
         }
         switch (role) {
-            case SURVIVOR -> apply(20.0, 0.1);
-            case HOST_ZOMBIE -> apply(40.0, 0.125);
-            case ZOMBIE -> apply(10.0, 0.11);
+            case SURVIVOR -> apply(20.0, 0.1, 4.0);
+            case HOST_ZOMBIE -> apply(40.0, 0.125, 9.0);
+            case ZOMBIE -> apply(10.0, 0.11, 6.0);
         }
     }
 
-    private void apply(double health, double speed) {
+    private void apply(double health, double speed, double attackDamage) {
         if (player == null) {
             return;
         }
@@ -71,6 +71,10 @@ public class PlayerProfile {
         AttributeInstance movement = player.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED);
         if (movement != null) {
             movement.setBaseValue(speed);
+        }
+        AttributeInstance attack = player.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE);
+        if (attack != null) {
+            attack.setBaseValue(attackDamage);
         }
     }
 }

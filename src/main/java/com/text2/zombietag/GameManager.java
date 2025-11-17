@@ -16,7 +16,9 @@ import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Blaze;
 import org.bukkit.entity.EnderDragon;
+import org.bukkit.entity.Enderman;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
@@ -24,6 +26,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -60,7 +63,7 @@ public class GameManager implements Listener {
     private final Map<UUID, PlayerProfile> profiles = new HashMap<>();
     private final Map<UUID, TimedMarker> stunnedPlayers = new HashMap<>();
     private final Map<UUID, TimedMarker> infections = new HashMap<>();
-    private final Map<UUID, TimedMarker> pendingRespawns = new HashMap<>();
+    private final Map<UUID, TimedMarker> zombieRecoveries = new HashMap<>();
     private BossBar bossBar;
     private Scoreboard scoreboard;
     private Team survivorTeam;
@@ -78,6 +81,7 @@ public class GameManager implements Listener {
     private final Random random = new Random();
     private final Map<UUID, TimedMarker> dormantHosts = new HashMap<>();
     private final Map<UUID, TimedMarker> rejoinGrace = new HashMap<>();
+    private final Map<UUID, UUID> lastTrackedTargets = new HashMap<>();
     private long nextGrowthTimestamp;
     private static final long FIRST_GROWTH_DELAY = Duration.ofMinutes(30).toMillis();
     private static final long GROWTH_INTERVAL = Duration.ofMinutes(15).toMillis();
@@ -135,19 +139,19 @@ public class GameManager implements Listener {
         survivorList.forEach(this::scatterSurvivor);
         hostList.forEach(this::prepareDormantHost);
 
-        Bukkit.broadcast(Component.text("좀비 술래잡기가 시작되었습니다! 숙주좀비는 5분 뒤 깨어납니다.", NamedTextColor.GOLD));
+        Bukkit.broadcast(Component.text("⚔️ 좀비 사냥전 개시! 숙주 좀비는 5분 뒤 각성하니 신속히 거점을 잡으세요.", NamedTextColor.GOLD));
         playSoundToAll(Sound.EVENT_RAID_HORN, 1f, 1f);
 
         hostReleaseTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
             for (Player host : hostList) {
                 activateHost(host);
             }
-            Bukkit.broadcast(Component.text("숙주좀비가 각성했습니다!", NamedTextColor.DARK_RED));
+            Bukkit.broadcast(Component.text("👑 숙주 좀비 군단이 눈을 떴습니다! 생존자 위치 추적이 시작됩니다.", NamedTextColor.DARK_RED));
             playSoundToAll(Sound.ENTITY_WITHER_SPAWN, 1f, 0.5f);
         }, 20L * 300);
 
         pulseTask = Bukkit.getScheduler().runTaskTimer(plugin, this::pulse, 0L, 20L);
-        trackerTask = Bukkit.getScheduler().runTaskTimer(plugin, this::updateTracking, 0L, 40L);
+        trackerTask = Bukkit.getScheduler().runTaskTimer(plugin, this::updateTracking, 0L, 10L);
         growthTask = Bukkit.getScheduler().runTaskTimer(plugin, this::increaseGrowth, 20L * 60 * 30, 20L * 60 * 15);
     }
 
@@ -187,6 +191,7 @@ public class GameManager implements Listener {
             online.setScoreboard(mainBoard);
             online.setGameMode(GameMode.SURVIVAL);
             unlockMovement(online);
+            online.setInvulnerable(false);
             online.setFoodLevel(20);
             online.setSaturation(20);
             online.getInventory().remove(Material.COMPASS);
@@ -196,10 +201,11 @@ public class GameManager implements Listener {
         profiles.clear();
         stunnedPlayers.clear();
         infections.clear();
-        pendingRespawns.clear();
+        zombieRecoveries.clear();
         dormantHosts.clear();
         rejoinGrace.clear();
         firedGrowthReminders.clear();
+        lastTrackedTargets.clear();
         zeroZero = null;
         sidebarEntries.clear();
     }
@@ -258,7 +264,7 @@ public class GameManager implements Listener {
     }
 
     private void initBossbar() {
-        bossBar = Bukkit.createBossBar("감염 진행도", BarColor.RED, BarStyle.SOLID);
+        bossBar = Bukkit.createBossBar("감염률(숙주 제외)", BarColor.GREEN, BarStyle.SEGMENTED_12);
         bossBar.setVisible(true);
         Bukkit.getOnlinePlayers().forEach(bossBar::addPlayer);
     }
@@ -340,8 +346,8 @@ public class GameManager implements Listener {
             fallback = infections.get(uuid).location();
         } else if (stunnedPlayers.containsKey(uuid)) {
             fallback = stunnedPlayers.get(uuid).location();
-        } else if (pendingRespawns.containsKey(uuid)) {
-            fallback = pendingRespawns.get(uuid).location();
+        } else if (zombieRecoveries.containsKey(uuid)) {
+            fallback = zombieRecoveries.get(uuid).location();
         } else if (dormantHosts.containsKey(uuid)) {
             fallback = dormantHosts.get(uuid).location();
         }
@@ -389,12 +395,14 @@ public class GameManager implements Listener {
             player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 1f, 0.8f);
             return;
         }
-        TimedMarker respawn = pendingRespawns.get(uuid);
-        if (respawn != null && respawn.releaseTime() > System.currentTimeMillis()) {
-            int ticks = ticksUntilRelease(respawn);
+        TimedMarker zombieDown = zombieRecoveries.get(uuid);
+        if (zombieDown != null && zombieDown.releaseTime() > System.currentTimeMillis()) {
+            int ticks = ticksUntilRelease(zombieDown);
             lockMovement(player, ticks);
-            player.showTitle(Title.title(Component.text("재집결 대기", NamedTextColor.DARK_GREEN), Component.text("곧 복귀합니다", NamedTextColor.GREEN)));
-            player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 1.2f);
+            setZombieShield(player, true);
+            player.addPotionEffect(new PotionEffect(PotionEffectType.DAMAGE_RESISTANCE, ticks, 3, true, false));
+            player.showTitle(Title.title(Component.text("재정비 중", NamedTextColor.DARK_RED), Component.text("1분 뒤 다시 일어납니다", NamedTextColor.RED)));
+            player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.7f);
             return;
         }
         unlockMovement(player);
@@ -422,7 +430,7 @@ public class GameManager implements Listener {
         long elapsed = System.currentTimeMillis() - startTime;
         updateSidebar(elapsed);
         updateBossbar();
-        sendActionbar();
+        sendActionbar(elapsed);
         checkTimedEffects();
         checkGrowthReminders();
         checkWinConditions();
@@ -436,16 +444,32 @@ public class GameManager implements Listener {
             scoreboard.resetScores(entry);
         }
         sidebarEntries.clear();
-        List<String> lines = new ArrayList<>();
-        lines.add(ChatColor.GREEN + "생존자: " + ChatColor.WHITE + countRole(Role.SURVIVOR));
-        lines.add(ChatColor.RED + "좀비: " + ChatColor.WHITE + countZombies());
-        lines.add(ChatColor.YELLOW + "경과: " + ChatColor.WHITE + formatDuration(elapsed));
-        lines.add(ChatColor.AQUA + "복귀 대기: " + ChatColor.WHITE + rejoinGrace.size());
-        lines.add(ChatColor.GOLD + "증강 단계: " + ChatColor.WHITE + growthLevel);
+        int survivors = countRole(Role.SURVIVOR);
+        int hosts = countRole(Role.HOST_ZOMBIE);
+        int infected = countRole(Role.ZOMBIE);
+        int totalInfecting = survivors + infected;
+        double progress = totalInfecting == 0 ? 0.0 : infected / (double) totalInfecting;
+        String ratioText = String.format(Locale.KOREA, "%02d%%", (int) Math.round(progress * 100));
         long nextGrowth = getNextGrowthCountdown();
-        lines.add(ChatColor.LIGHT_PURPLE + "다음 증강: " + ChatColor.WHITE + formatDuration(nextGrowth));
+        long activeGrace = rejoinGrace.values().stream().filter(marker -> marker.releaseTime() > System.currentTimeMillis()).count();
+        List<String> lines = new ArrayList<>();
+        lines.add(ChatColor.DARK_GREEN + "┏━ 전황 브리핑 ━┓");
+        lines.add(ChatColor.YELLOW + " ⏱ 경과 " + ChatColor.WHITE + formatDuration(elapsed));
+        lines.add(ChatColor.GOLD + " ⚡ 증강 Lv." + growthLevel);
+        lines.add(ChatColor.LIGHT_PURPLE + " ➜ 다음 증강 " + ChatColor.WHITE + formatDuration(nextGrowth));
+        lines.add(ChatColor.BLACK + " ");
+        lines.add(ChatColor.GREEN + " 🛡 생존자 " + ChatColor.WHITE + survivors + "명");
+        lines.add(ChatColor.RED + " 🧟 감염자 " + ChatColor.WHITE + infected + "명");
+        lines.add(ChatColor.DARK_RED + " 👑 숙주 " + ChatColor.WHITE + hosts + "명");
+        lines.add(ChatColor.LIGHT_PURPLE + " ☣ 감염률 " + ChatColor.WHITE + ratioText + ChatColor.GRAY + " (숙주 제외)");
+        lines.add(ChatColor.BLUE + " 💉 감염 대기 " + ChatColor.WHITE + infections.size() + "명");
+        lines.add(ChatColor.DARK_AQUA + " 💤 기절/재정비 " + ChatColor.WHITE + (stunnedPlayers.size() + zombieRecoveries.size()) + "명");
+        lines.add(ChatColor.AQUA + " 🔁 복귀 유예 " + ChatColor.WHITE + activeGrace + "명");
+        lines.add(ChatColor.GRAY + " 🌙 숙주 대기 " + ChatColor.WHITE + dormantHosts.size() + "명");
+        lines.add(ChatColor.DARK_GREEN + "┗━━━━━━━━━━━━┛");
         for (int i = 0; i < lines.size(); i++) {
-            String entry = lines.get(i) + ChatColor.values()[i];
+            ChatColor suffix = ChatColor.values()[i % ChatColor.values().length];
+            String entry = lines.get(i) + suffix;
             sidebar.getScore(entry).setScore(lines.size() - i);
             sidebarEntries.add(entry);
         }
@@ -459,21 +483,31 @@ public class GameManager implements Listener {
         int converted = countRole(Role.ZOMBIE);
         int denominator = survivors + converted;
         double progress = denominator == 0 ? 0.0 : converted / (double) denominator;
-        bossBar.setProgress(Math.min(1.0, Math.max(0.0, progress)));
-        bossBar.setTitle("감염률 " + (int) Math.round(progress * 100) + "% | 생존 " + survivors + "명");
+        double clamped = Math.min(1.0, Math.max(0.0, progress));
+        bossBar.setProgress(clamped);
+        BarColor color = clamped < 0.34 ? BarColor.GREEN : clamped < 0.67 ? BarColor.YELLOW : BarColor.RED;
+        if (bossBar.getColor() != color) {
+            bossBar.setColor(color);
+        }
+        bossBar.setTitle(String.format(Locale.KOREA, "감염률(숙주 제외) %d%% | 생존 %d명 / 감염 %d명", (int) Math.round(clamped * 100), survivors, converted));
     }
 
-    private void sendActionbar() {
+    private void sendActionbar(long elapsed) {
         int survivorCount = countRole(Role.SURVIVOR);
         int zombieCount = countZombies();
         String timer = formatDuration(getNextGrowthCountdown());
+        String roundTimer = formatDuration(elapsed);
         Component component = Component.text(
-                "생존자 " + survivorCount + "명 | 좀비 " + zombieCount + "명 | 증강 " + timer + " 후",
+                "🛡 생존 " + survivorCount + "명  |  🧟 위협 " + zombieCount + "명  |  ⚡ 증강 " + timer + " 후  |  ⏱ " + roundTimer,
                 NamedTextColor.AQUA
         );
         for (PlayerProfile profile : profiles.values()) {
             Player player = profile.getPlayer();
-            if (player != null && player.isOnline()) {
+            if (player == null || !player.isOnline()) {
+                continue;
+            }
+            UUID uuid = player.getUniqueId();
+            if (profile.getRole() == Role.SURVIVOR || dormantHosts.containsKey(uuid)) {
                 player.sendActionBar(component);
             }
         }
@@ -510,16 +544,18 @@ public class GameManager implements Listener {
                 iterator.remove();
             }
         }
-        iterator = pendingRespawns.entrySet().iterator();
+        iterator = zombieRecoveries.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<UUID, TimedMarker> entry = iterator.next();
             if (entry.getValue().releaseTime() <= now) {
                 Player player = Bukkit.getPlayer(entry.getKey());
                 if (player != null && player.isOnline()) {
                     unlockMovement(player);
-                    player.teleport(entry.getValue().location());
-                    player.setGameMode(GameMode.SURVIVAL);
-                    scatterZombiesOnRespawn(player);
+                    setZombieShield(player, false);
+                    player.removePotionEffect(PotionEffectType.DAMAGE_RESISTANCE);
+                    player.sendMessage(ChatColor.DARK_RED + "재정비를 마치고 다시 움직일 수 있습니다!");
+                    player.showTitle(Title.title(Component.text("재가동", NamedTextColor.DARK_RED), Component.text("본진으로 귀환하였습니다", NamedTextColor.GRAY)));
+                    player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_INFECT, 1f, 0.9f);
                 }
                 iterator.remove();
             }
@@ -536,8 +572,9 @@ public class GameManager implements Listener {
                 }
                 stunnedPlayers.remove(uuid);
                 infections.remove(uuid);
-                pendingRespawns.remove(uuid);
+                zombieRecoveries.remove(uuid);
                 dormantHosts.remove(uuid);
+                lastTrackedTargets.remove(uuid);
                 iterator.remove();
                 checkWinConditions();
             }
@@ -549,7 +586,7 @@ public class GameManager implements Listener {
             return;
         }
         growthLevel++;
-        Bukkit.broadcast(Component.text("좀비 증강 단계 " + growthLevel + " 발동! 이동 속도와 공격력이 강화됩니다.", NamedTextColor.DARK_PURPLE));
+        Bukkit.broadcast(Component.text("⚡ 좀비 증강 단계 " + growthLevel + " 발동! 이동 속도와 공격력이 폭발적으로 증가합니다.", NamedTextColor.DARK_PURPLE));
         for (PlayerProfile profile : profiles.values()) {
             Player player = profile.getPlayer();
             if (player == null || !player.isOnline()) {
@@ -593,7 +630,7 @@ public class GameManager implements Listener {
             if (remaining <= window && firedGrowthReminders.add(window)) {
                 String readable = formatDuration(Math.max(remaining, 0));
                 if (window >= Duration.ofMinutes(1).toMillis()) {
-                    Bukkit.broadcast(Component.text("다음 증강까지 " + readable + " 남았습니다. (단계 " + upcomingLevel + ")", NamedTextColor.LIGHT_PURPLE));
+                    Bukkit.broadcast(Component.text("⏰ 다음 증강까지 " + readable + " 남았습니다. (예정 단계 " + upcomingLevel + ")", NamedTextColor.LIGHT_PURPLE));
                     playSoundToAll(Sound.BLOCK_NOTE_BLOCK_BELL, 0.8f, 1.2f);
                 } else {
                     for (PlayerProfile profile : profiles.values()) {
@@ -643,6 +680,12 @@ public class GameManager implements Listener {
     private void playSoundToAll(Sound sound, float volume, float pitch) {
         for (Player player : Bukkit.getOnlinePlayers()) {
             player.playSound(player.getLocation(), sound, volume, pitch);
+        }
+    }
+
+    private void setZombieShield(Player player, boolean shielded) {
+        if (player != null) {
+            player.setInvulnerable(shielded);
         }
     }
 
@@ -704,14 +747,27 @@ public class GameManager implements Listener {
             if (zombie == null || !zombie.isOnline()) {
                 continue;
             }
+            UUID uuid = zombie.getUniqueId();
+            if (dormantHosts.containsKey(uuid) || zombieRecoveries.containsKey(uuid)) {
+                continue;
+            }
+            Location zombieLocation = zombie.getLocation();
             Player nearest = survivors.stream()
                     .filter(survivor -> survivor.getWorld().equals(zombie.getWorld()))
-                    .min((a, b) -> Double.compare(a.getLocation().distanceSquared(zombie.getLocation()),
-                            b.getLocation().distanceSquared(zombie.getLocation())))
+                    .min((a, b) -> Double.compare(a.getLocation().distanceSquared(zombieLocation),
+                            b.getLocation().distanceSquared(zombieLocation)))
                     .orElse(null);
             if (nearest != null) {
-                zombie.setCompassTarget(nearest.getLocation());
-                zombie.sendActionBar(Component.text("추적 대상: " + nearest.getName() + " (" + (int) zombie.getLocation().distance(nearest.getLocation()) + "m)", NamedTextColor.RED));
+                UUID targetId = nearest.getUniqueId();
+                Location targetLocation = nearest.getLocation();
+                if (!Objects.equals(lastTrackedTargets.get(uuid), targetId)) {
+                    lastTrackedTargets.put(uuid, targetId);
+                    zombie.playSound(zombieLocation, Sound.UI_LOOM_TAKE_RESULT, 0.6f, 1.6f);
+                    zombie.sendMessage(ChatColor.DARK_RED + "새로운 추적 대상: " + ChatColor.RED + nearest.getName());
+                }
+                zombie.setCompassTarget(targetLocation);
+                int distance = (int) Math.round(zombieLocation.distance(targetLocation));
+                zombie.sendActionBar(Component.text("📡 " + nearest.getName() + " 까지 " + distance + "m", NamedTextColor.RED));
             }
         }
     }
@@ -740,7 +796,7 @@ public class GameManager implements Listener {
             player.showTitle(Title.title(Component.text("감염!", NamedTextColor.RED), Component.text("좀비 진영으로 합류", NamedTextColor.DARK_RED)));
             player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.6f);
         }
-        Bukkit.broadcast(Component.text(profile.getLastKnownName() + " 님이 감염되었습니다!", NamedTextColor.DARK_RED));
+        Bukkit.broadcast(Component.text("☣ " + profile.getLastKnownName() + " 님이 감염되어 좀비 진영에 합류했습니다!", NamedTextColor.DARK_RED));
         checkWinConditions();
     }
 
@@ -755,7 +811,8 @@ public class GameManager implements Listener {
 
     @EventHandler
     public void onCreatureSpawn(CreatureSpawnEvent event) {
-        if (event.getEntity() instanceof Monster) {
+        Entity entity = event.getEntity();
+        if (entity instanceof Monster && !(entity instanceof Enderman) && !(entity instanceof Blaze)) {
             event.setCancelled(true);
         }
     }
@@ -765,6 +822,11 @@ public class GameManager implements Listener {
         if (!(event.getEntity() instanceof Player victim) || !(event.getDamager() instanceof Player attacker)) {
             return;
         }
+        TimedMarker recovery = zombieRecoveries.get(victim.getUniqueId());
+        if (recovery != null && recovery.releaseTime() > System.currentTimeMillis()) {
+            event.setCancelled(true);
+            return;
+        }
         PlayerProfile victimProfile = profiles.get(victim.getUniqueId());
         PlayerProfile attackerProfile = profiles.get(attacker.getUniqueId());
         if (victimProfile == null || attackerProfile == null) {
@@ -772,6 +834,17 @@ public class GameManager implements Listener {
         }
         if ((victimProfile.getRole() == Role.SURVIVOR && attackerProfile.getRole() == Role.SURVIVOR) ||
                 (victimProfile.getRole().isZombie() && attackerProfile.getRole().isZombie())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onProtectedDamage(EntityDamageEvent event) {
+        if (!running || !(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        TimedMarker recovery = zombieRecoveries.get(player.getUniqueId());
+        if (recovery != null && recovery.releaseTime() > System.currentTimeMillis()) {
             event.setCancelled(true);
         }
     }
@@ -802,7 +875,7 @@ public class GameManager implements Listener {
                 applyStun(player);
             }
         } else {
-            pendingRespawns.put(player.getUniqueId(), new TimedMarker(zeroZero, System.currentTimeMillis() + 15_000));
+            applyZombieDown(player);
         }
     }
 
@@ -811,6 +884,13 @@ public class GameManager implements Listener {
         player.sendMessage(ChatColor.YELLOW + "자연사로 인해 1분간 기절합니다. 자리를 지키고 부여된 버프로 생존하세요.");
         player.showTitle(Title.title(Component.text("기절!", NamedTextColor.GOLD), Component.text("1분 동안 움직일 수 없습니다", NamedTextColor.YELLOW)));
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 1f, 0.8f);
+    }
+
+    private void applyZombieDown(Player player) {
+        zombieRecoveries.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
+        player.sendMessage(ChatColor.DARK_RED + "좀비가 쓰러졌습니다. 1분 동안 재정비하며 피해를 받지 않습니다.");
+        player.showTitle(Title.title(Component.text("재정비 시작", NamedTextColor.DARK_RED), Component.text("60초 뒤 복귀", NamedTextColor.RED)));
+        player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.6f);
     }
 
     @EventHandler
@@ -837,8 +917,9 @@ public class GameManager implements Listener {
             Bukkit.broadcast(Component.text(profile.getLastKnownName() + " 님이 복귀 시간을 넘겨 관전자 전환되었습니다.", NamedTextColor.GRAY));
             stunnedPlayers.remove(uuid);
             infections.remove(uuid);
-            pendingRespawns.remove(uuid);
+            zombieRecoveries.remove(uuid);
             dormantHosts.remove(uuid);
+            lastTrackedTargets.remove(uuid);
             checkWinConditions();
         }
         enableSpectator(player);
@@ -859,7 +940,7 @@ public class GameManager implements Listener {
         attachHud(player);
         TimedMarker infection = infections.get(player.getUniqueId());
         TimedMarker stun = stunnedPlayers.get(player.getUniqueId());
-        TimedMarker respawn = pendingRespawns.get(player.getUniqueId());
+        TimedMarker zombieDown = zombieRecoveries.get(player.getUniqueId());
         if (infection != null) {
             event.setRespawnLocation(infection.location());
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -879,13 +960,16 @@ public class GameManager implements Listener {
                 player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 75, 1, true, false));
                 player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, 20 * 75, 0, true, false));
             });
-        } else if (respawn != null) {
-            event.setRespawnLocation(respawn.location());
+        } else if (zombieDown != null) {
+            event.setRespawnLocation(zombieDown.location());
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.setGameMode(GameMode.SURVIVAL);
-                lockMovement(player, ticksUntilRelease(respawn));
-                player.showTitle(Title.title(Component.text("재집결 대기", NamedTextColor.DARK_GREEN), Component.text("15초 뒤 복귀", NamedTextColor.GREEN)));
-                player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 1.2f);
+                int ticks = ticksUntilRelease(zombieDown);
+                lockMovement(player, ticks);
+                setZombieShield(player, true);
+                player.addPotionEffect(new PotionEffect(PotionEffectType.DAMAGE_RESISTANCE, ticks, 3, true, false));
+                player.showTitle(Title.title(Component.text("재정비 진행", NamedTextColor.DARK_RED), Component.text("곧 다시 일어납니다", NamedTextColor.RED)));
+                player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.7f);
             });
         } else if (zeroZero != null) {
             event.setRespawnLocation(zeroZero);
@@ -908,7 +992,7 @@ public class GameManager implements Listener {
             event.setTo(event.getFrom());
             return;
         }
-        TimedMarker respawn = pendingRespawns.get(uuid);
+        TimedMarker respawn = zombieRecoveries.get(uuid);
         if (respawn != null && respawn.releaseTime() > System.currentTimeMillis()) {
             event.setTo(event.getFrom());
             return;
