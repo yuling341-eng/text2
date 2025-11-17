@@ -242,14 +242,19 @@ public class GameManager implements Listener {
 
     private void initScoreboard() {
         scoreboard = Bukkit.getScoreboardManager().getNewScoreboard();
-        sidebar = scoreboard.registerNewObjective("zt", "dummy", ChatColor.DARK_GREEN + "Zombie Tag", RenderType.INTEGER);
+        sidebar = scoreboard.registerNewObjective(
+                "zt",
+                "dummy",
+                Component.text("Zombie Tag", NamedTextColor.DARK_GREEN),
+                RenderType.INTEGER
+        );
         sidebar.setDisplaySlot(DisplaySlot.SIDEBAR);
         survivorTeam = scoreboard.registerNewTeam("survivors");
         survivorTeam.setAllowFriendlyFire(false);
-        survivorTeam.color(org.bukkit.ChatColor.GREEN);
+        survivorTeam.color(NamedTextColor.GREEN);
         zombieTeam = scoreboard.registerNewTeam("zombies");
         zombieTeam.setAllowFriendlyFire(false);
-        zombieTeam.color(org.bukkit.ChatColor.RED);
+        zombieTeam.color(NamedTextColor.RED);
     }
 
     private Location findRandomLocation(World world, Location center, int radius) {
