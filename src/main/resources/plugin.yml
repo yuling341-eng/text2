@@ -9,3 +9,6 @@ commands:
     description: Manage the zombie tag mini-game
     usage: /<command> <start|stop|status|reload>
     aliases: [zt]
+  c:
+    description: Send a private team chat message
+    usage: /<command> <message>

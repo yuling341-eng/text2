@@ -26,6 +26,7 @@ mvn package
 | `/zombietag stop` | 진행 중인 게임을 종료합니다. | `zombietag.admin` |
 | `/zombietag status` | 현재 진행 상태를 확인합니다. | 누구나 |
 | `/zombietag reload` | `config.yml`을 다시 불러오고 즉시 적용합니다. | `zombietag.admin` |
+| `/c <메시지>` | 생존/감염 팀 전용 비밀 채팅 (관전자도 열람 가능) | 참가자 |
 
 ### 설정
 

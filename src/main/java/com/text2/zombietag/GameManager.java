@@ -107,6 +107,10 @@ public class GameManager implements Listener {
         return running;
     }
 
+    public PlayerProfile getProfile(UUID uuid) {
+        return profiles.get(uuid);
+    }
+
     public void startGame(CommandSender sender) {
         if (running) {
             sender.sendMessage(Component.text("게임이 이미 진행 중입니다.", NamedTextColor.RED));
@@ -963,6 +967,29 @@ public class GameManager implements Listener {
         }
         if (countRole(Role.SURVIVOR) == 0) {
             stopGame("모든 생존자가 감염되었습니다. 좀비의 승리!");
+        }
+    }
+
+    public void sendTeamChat(Player sender, Role channelRole, String message) {
+        boolean zombieChannel = channelRole.isZombie();
+        String channelName = zombieChannel ? "☣ 감염" : "🛡 생존";
+        NamedTextColor channelColor = zombieChannel ? NamedTextColor.RED : NamedTextColor.GREEN;
+        Component chatComponent = Component.text()
+                .append(Component.text("[" + channelName + "] ", channelColor))
+                .append(Component.text(sender.getName(), channelColor))
+                .append(Component.text(" › ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(message, NamedTextColor.WHITE))
+                .build();
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            PlayerProfile recipientProfile = profiles.get(online.getUniqueId());
+            boolean spectator = recipientProfile == null;
+            boolean sameTeam = false;
+            if (recipientProfile != null) {
+                sameTeam = zombieChannel ? recipientProfile.getRole().isZombie() : recipientProfile.getRole() == Role.SURVIVOR;
+            }
+            if (spectator || sameTeam) {
+                online.sendMessage(chatComponent);
+            }
         }
     }
 

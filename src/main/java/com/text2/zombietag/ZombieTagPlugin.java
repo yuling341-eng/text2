@@ -19,6 +19,10 @@ public class ZombieTagPlugin extends JavaPlugin {
             command.setExecutor(executor);
             command.setTabCompleter(executor);
         }
+        PluginCommand teamChat = getCommand("c");
+        if (teamChat != null) {
+            teamChat.setExecutor(new TeamChatCommand(gameManager));
+        }
         getLogger().info("ZombieTag plugin enabled");
     }
 
