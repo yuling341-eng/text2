@@ -1,0 +1,14 @@
+name: ZombieTag
+main: com.text2.zombietag.ZombieTagPlugin
+version: 1.0.0
+author: text2-agent
+description: High quality zombie tag mini-game
+api-version: 1.21.4
+commands:
+  zombietag:
+    description: Manage the zombie tag mini-game
+    usage: /<command> <start|stop|status|reload>
+    aliases: [zt]
+  c:
+    description: Send a private team chat message
+    usage: /<command> <message>
