@@ -195,6 +195,8 @@ public class GameManager implements Listener {
             online.setFoodLevel(20);
             online.setSaturation(20);
             online.getInventory().remove(Material.COMPASS);
+            online.playerListName(null);
+            online.sendPlayerListHeaderAndFooter(Component.empty(), Component.empty());
         }
         bossBar = null;
         scoreboard = null;
@@ -431,6 +433,7 @@ public class GameManager implements Listener {
         updateSidebar(elapsed);
         updateBossbar();
         sendActionbar(elapsed);
+        updateTabList(elapsed);
         checkTimedEffects();
         checkGrowthReminders();
         checkWinConditions();
@@ -511,6 +514,79 @@ public class GameManager implements Listener {
                 player.sendActionBar(component);
             }
         }
+    }
+
+    private void updateTabList(long elapsed) {
+        long growthCountdown = getNextGrowthCountdown();
+        int survivors = countRole(Role.SURVIVOR);
+        int zombies = countRole(Role.ZOMBIE);
+        int hosts = countRole(Role.HOST_ZOMBIE);
+        int stunned = stunnedPlayers.size() + zombieRecoveries.size();
+        int waiting = infections.size();
+        Component header = Component.text()
+                .append(Component.text("╔══ ⚔ 좀비 태그 사령부 ⚔ ══╗", NamedTextColor.DARK_GREEN))
+                .append(Component.newline())
+                .append(Component.text("⏱ 라운드 " + formatDuration(elapsed) + "  •  ⚡ 다음 증강 " + formatDuration(growthCountdown),
+                        NamedTextColor.GOLD))
+                .append(Component.newline())
+                .append(Component.text("🛡 생존 " + survivors + "  |  🧟 감염 " + zombies + "  |  👑 숙주 " + hosts,
+                        NamedTextColor.AQUA))
+                .build();
+        double infectionRatio = (survivors + zombies) == 0 ? 0.0 : zombies / (double) (survivors + zombies);
+        Component footer = Component.text()
+                .append(Component.text("☣ 감염률 " + String.format(Locale.KOREA, "%02d%%", (int) Math.round(infectionRatio * 100))
+                        + "  •  💉 대기 " + waiting + "  •  💤 기절/재정비 " + stunned,
+                        NamedTextColor.LIGHT_PURPLE))
+                .append(Component.newline())
+                .append(Component.text("엔더맨/블레이즈만 자연 스폰 • HUD + 사운드로 상황 공유", NamedTextColor.GRAY))
+                .build();
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.sendPlayerListHeaderAndFooter(header, footer);
+            Component decorated = decorateTabName(online);
+            if (decorated != null) {
+                online.playerListName(decorated);
+            } else {
+                online.playerListName(Component.text(online.getName(), NamedTextColor.WHITE));
+            }
+        }
+    }
+
+    private Component decorateTabName(Player player) {
+        if (!running) {
+            return null;
+        }
+        UUID uuid = player.getUniqueId();
+        PlayerProfile profile = profiles.get(uuid);
+        if (profile == null) {
+            return Component.text("◎ 관전  ", NamedTextColor.GRAY)
+                    .append(Component.text(player.getName(), NamedTextColor.WHITE));
+        }
+        Role role = profile.getRole();
+        NamedTextColor roleColor = switch (role) {
+            case SURVIVOR -> NamedTextColor.GREEN;
+            case HOST_ZOMBIE -> NamedTextColor.DARK_RED;
+            case ZOMBIE -> NamedTextColor.RED;
+        };
+        String badge = switch (role) {
+            case SURVIVOR -> "🛡";
+            case HOST_ZOMBIE -> "👑";
+            case ZOMBIE -> "🧟";
+        };
+        String state;
+        if (stunnedPlayers.containsKey(uuid)) {
+            state = "기절";
+        } else if (infections.containsKey(uuid)) {
+            state = "감염 대기";
+        } else if (zombieRecoveries.containsKey(uuid)) {
+            state = "재정비";
+        } else if (dormantHosts.containsKey(uuid)) {
+            state = "각성 대기";
+        } else {
+            state = "전투 중";
+        }
+        Component base = Component.text(badge + " ", roleColor)
+                .append(Component.text(player.getName(), roleColor));
+        return base.append(Component.text(" 〔" + state + "〕", NamedTextColor.GRAY));
     }
 
     private void checkTimedEffects() {
@@ -595,7 +671,7 @@ public class GameManager implements Listener {
             if (profile.getRole().isZombie()) {
                 double baseSpeed = profile.getRole() == Role.HOST_ZOMBIE ? 0.125 : 0.11;
                 double boosted = baseSpeed * (1 + growthLevel * 0.05);
-                AttributeInstance movement = player.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED);
+                AttributeInstance movement = player.getAttribute(Attribute.MOVEMENT_SPEED);
                 if (movement != null) {
                     movement.setBaseValue(boosted);
                 }

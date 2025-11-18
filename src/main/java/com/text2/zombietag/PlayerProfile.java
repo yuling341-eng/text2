@@ -63,16 +63,16 @@ public class PlayerProfile {
         if (player == null) {
             return;
         }
-        AttributeInstance maxHealth = player.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        AttributeInstance maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
         if (maxHealth != null) {
             maxHealth.setBaseValue(health);
         }
         player.setHealth(health);
-        AttributeInstance movement = player.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED);
+        AttributeInstance movement = player.getAttribute(Attribute.MOVEMENT_SPEED);
         if (movement != null) {
             movement.setBaseValue(speed);
         }
-        AttributeInstance attack = player.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE);
+        AttributeInstance attack = player.getAttribute(Attribute.ATTACK_DAMAGE);
         if (attack != null) {
             attack.setBaseValue(attackDamage);
         }
