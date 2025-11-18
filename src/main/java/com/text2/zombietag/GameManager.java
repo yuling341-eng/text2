@@ -683,6 +683,11 @@ public class GameManager implements Listener {
                     unlockMovement(player);
                     setZombieShield(player, false);
                     player.removePotionEffect(PotionEffectType.RESISTANCE);
+                    PlayerProfile profile = profiles.get(entry.getKey());
+                    if (profile != null && settings != null) {
+                        profile.applyAttributes(settings);
+                        applyGrowthBuffs(profile);
+                    }
                     player.sendMessage(ChatColor.DARK_RED + "재정비를 마치고 다시 움직일 수 있습니다!");
                     player.showTitle(Title.title(Component.text("재가동", NamedTextColor.DARK_RED), Component.text("본진으로 귀환하였습니다", NamedTextColor.GRAY)));
                     player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_INFECT, 1f, 0.9f);
