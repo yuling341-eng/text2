@@ -60,6 +60,7 @@ import java.util.stream.Collectors;
 
 public class GameManager implements Listener {
     private final ZombieTagPlugin plugin;
+    private ConfigSettings settings;
     private final Map<UUID, PlayerProfile> profiles = new HashMap<>();
     private final Map<UUID, TimedMarker> stunnedPlayers = new HashMap<>();
     private final Map<UUID, TimedMarker> infections = new HashMap<>();
@@ -83,19 +84,23 @@ public class GameManager implements Listener {
     private final Map<UUID, TimedMarker> rejoinGrace = new HashMap<>();
     private final Map<UUID, UUID> lastTrackedTargets = new HashMap<>();
     private long nextGrowthTimestamp;
-    private static final long FIRST_GROWTH_DELAY = Duration.ofMinutes(30).toMillis();
-    private static final long GROWTH_INTERVAL = Duration.ofMinutes(15).toMillis();
-    private static final long[] GROWTH_REMINDER_WINDOWS = {
-            Duration.ofMinutes(10).toMillis(),
-            Duration.ofMinutes(5).toMillis(),
-            Duration.ofMinutes(1).toMillis(),
-            Duration.ofSeconds(30).toMillis(),
-            Duration.ofSeconds(10).toMillis()
-    };
     private final Set<Long> firedGrowthReminders = new HashSet<>();
 
-    public GameManager(ZombieTagPlugin plugin) {
+    public GameManager(ZombieTagPlugin plugin, ConfigSettings settings) {
         this.plugin = plugin;
+        this.settings = settings;
+    }
+
+    public void updateSettings(ConfigSettings newSettings) {
+        this.settings = newSettings;
+        for (PlayerProfile profile : profiles.values()) {
+            profile.applyAttributes(settings);
+            applyGrowthBuffs(profile);
+        }
+        if (running) {
+            restartTrackerTask();
+            restartGrowthTask();
+        }
     }
 
     public boolean isRunning() {
@@ -105,6 +110,10 @@ public class GameManager implements Listener {
     public void startGame(CommandSender sender) {
         if (running) {
             sender.sendMessage(Component.text("게임이 이미 진행 중입니다.", NamedTextColor.RED));
+            return;
+        }
+        if (settings == null) {
+            sender.sendMessage(Component.text("설정을 불러오지 못했습니다. /zombietag reload 후 다시 시도하세요.", NamedTextColor.RED));
             return;
         }
         List<Player> survivalPlayers = Bukkit.getOnlinePlayers().stream()
@@ -118,7 +127,7 @@ public class GameManager implements Listener {
         resetState();
         running = true;
         startTime = System.currentTimeMillis();
-        nextGrowthTimestamp = startTime + FIRST_GROWTH_DELAY;
+        nextGrowthTimestamp = startTime + settings.getGrowthSettings().firstDelayMillis();
         firedGrowthReminders.clear();
         rejoinGrace.clear();
         World world = survivalPlayers.get(0).getWorld();
@@ -129,7 +138,7 @@ public class GameManager implements Listener {
         initBossbar();
 
         Collections.shuffle(survivalPlayers, random);
-        int hostCount = Math.max(1, (int) Math.ceil(survivalPlayers.size() * 0.2));
+        int hostCount = Math.max(1, (int) Math.ceil(survivalPlayers.size() * settings.getHostRatio()));
         List<Player> hostList = survivalPlayers.subList(0, hostCount);
         List<Player> survivorList = survivalPlayers.subList(hostCount, survivalPlayers.size());
 
@@ -139,20 +148,24 @@ public class GameManager implements Listener {
         survivorList.forEach(this::scatterSurvivor);
         hostList.forEach(this::prepareDormantHost);
 
-        Bukkit.broadcast(Component.text("⚔️ 좀비 사냥전 개시! 숙주 좀비는 5분 뒤 각성하니 신속히 거점을 잡으세요.", NamedTextColor.GOLD));
+        String hostDelay = formatDuration(settings.getHostReleaseDelayMillis());
+        Bukkit.broadcast(Component.text("⚔️ 좀비 사냥전 개시! 숙주 좀비는 " + hostDelay + " 뒤 각성하니 신속히 거점을 잡으세요.", NamedTextColor.GOLD));
         playSoundToAll(Sound.EVENT_RAID_HORN, 1f, 1f);
 
+        long hostDelayTicks = millisToTicks(settings.getHostReleaseDelayMillis());
         hostReleaseTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
             for (Player host : hostList) {
                 activateHost(host);
             }
             Bukkit.broadcast(Component.text("👑 숙주 좀비 군단이 눈을 떴습니다! 생존자 위치 추적이 시작됩니다.", NamedTextColor.DARK_RED));
             playSoundToAll(Sound.ENTITY_WITHER_SPAWN, 1f, 0.5f);
-        }, 20L * 300);
+        }, hostDelayTicks);
 
         pulseTask = Bukkit.getScheduler().runTaskTimer(plugin, this::pulse, 0L, 20L);
-        trackerTask = Bukkit.getScheduler().runTaskTimer(plugin, this::updateTracking, 0L, 10L);
-        growthTask = Bukkit.getScheduler().runTaskTimer(plugin, this::increaseGrowth, 20L * 60 * 30, 20L * 60 * 15);
+        trackerTask = Bukkit.getScheduler().runTaskTimer(plugin, this::updateTracking, 0L, settings.getTrackingSettings().intervalTicks());
+        long firstGrowthTicks = millisToTicks(settings.getGrowthSettings().firstDelayMillis());
+        long growthIntervalTicks = millisToTicks(settings.getGrowthSettings().intervalMillis());
+        growthTask = Bukkit.getScheduler().runTaskTimer(plugin, this::increaseGrowth, firstGrowthTicks, growthIntervalTicks);
     }
 
     public void stopGame(String reason) {
@@ -215,7 +228,8 @@ public class GameManager implements Listener {
     private void registerPlayer(Player player, Role role) {
         PlayerProfile profile = new PlayerProfile(player, role);
         profiles.put(player.getUniqueId(), profile);
-        profile.applyAttributes();
+        profile.applyAttributes(settings);
+        applyGrowthBuffs(profile);
         player.setFoodLevel(20);
         player.setSaturation(20);
         player.setWalkSpeed(0.2f);
@@ -233,17 +247,20 @@ public class GameManager implements Listener {
             return;
         }
         World world = zeroZero.getWorld();
-        Location target = findRandomLocation(world, zeroZero, 1000);
+        Location target = findRandomLocation(world, zeroZero, settings.getScatterRadius());
         player.teleport(target);
-        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 10, 3, true, false));
+        ConfigSettings.BuffSettings buff = settings.getBuffSettings();
+        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE,
+                20 * buff.scatterResistanceSeconds(), buff.scatterResistanceAmplifier(), true, false));
         player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1.8f);
     }
 
     private void prepareDormantHost(Player player) {
         player.setGameMode(GameMode.SURVIVAL);
         player.teleport(zeroZero.clone().add(0, 200, 0));
-        dormantHosts.put(player.getUniqueId(), new TimedMarker(zeroZero, System.currentTimeMillis() + 300_000));
-        lockMovement(player, 20 * 60 * 5);
+        long releaseTime = System.currentTimeMillis() + settings.getHostReleaseDelayMillis();
+        dormantHosts.put(player.getUniqueId(), new TimedMarker(zeroZero, releaseTime));
+        lockMovement(player, (int) millisToTicks(settings.getHostReleaseDelayMillis()));
         player.showTitle(Title.title(Component.text("대기 중", NamedTextColor.GRAY), Component.text("곧 각성합니다", NamedTextColor.DARK_GRAY)));
         player.playSound(player.getLocation(), Sound.AMBIENT_CAVE, 1f, 0.6f);
     }
@@ -261,6 +278,11 @@ public class GameManager implements Listener {
         unlockMovement(player);
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
         player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, 20 * 120, 1, true, false));
+        PlayerProfile profile = profiles.get(player.getUniqueId());
+        if (profile != null) {
+            profile.applyAttributes(settings);
+            applyGrowthBuffs(profile);
+        }
         player.showTitle(Title.title(Component.text("사냥 시작!", NamedTextColor.DARK_RED), Component.text("생존자를 추적하세요", NamedTextColor.RED)));
         player.playSound(player.getLocation(), Sound.ENTITY_WITHER_SPAWN, 1f, 0.5f);
     }
@@ -294,6 +316,29 @@ public class GameManager implements Listener {
         }
         if (bossBar != null && !bossBar.getPlayers().contains(player)) {
             bossBar.addPlayer(player);
+        }
+    }
+
+    private void applyGrowthBuffs(PlayerProfile profile) {
+        if (profile == null || settings == null || growthLevel <= 0 || !profile.getRole().isZombie()) {
+            return;
+        }
+        Player player = profile.getPlayer();
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        ConfigSettings.RoleStats stats = settings.getRoleStats(profile.getRole());
+        if (stats == null) {
+            return;
+        }
+        ConfigSettings.GrowthSettings growth = settings.getGrowthSettings();
+        AttributeInstance movement = player.getAttribute(Attribute.MOVEMENT_SPEED);
+        if (movement != null) {
+            movement.setBaseValue(stats.movementSpeed() * growth.speedMultiplier(growthLevel));
+        }
+        AttributeInstance attack = player.getAttribute(Attribute.ATTACK_DAMAGE);
+        if (attack != null) {
+            attack.setBaseValue(stats.attackDamage() + growth.attackBonus(growthLevel));
         }
     }
 
@@ -337,7 +382,8 @@ public class GameManager implements Listener {
         player.setWalkSpeed(0.2f);
         attachHud(player);
         syncTeams(profile);
-        profile.applyAttributes();
+        profile.applyAttributes(settings);
+        applyGrowthBuffs(profile);
         player.getInventory().remove(Material.COMPASS);
         if (profile.getRole().isZombie()) {
             player.getInventory().addItem(new ItemStack(Material.COMPASS));
@@ -391,9 +437,11 @@ public class GameManager implements Listener {
         if (stun != null && stun.releaseTime() > System.currentTimeMillis()) {
             int ticks = ticksUntilRelease(stun);
             lockMovement(player, ticks);
-            player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 75, 1, true, false));
-            player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, 20 * 75, 0, true, false));
-            player.showTitle(Title.title(Component.text("기절 상태", NamedTextColor.GOLD), Component.text("1분 후 복귀", NamedTextColor.YELLOW)));
+            ConfigSettings.BuffSettings buff = settings.getBuffSettings();
+            player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * buff.stunFireResistanceSeconds(), 1, true, false));
+            player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, 20 * buff.stunWaterBreathingSeconds(), 0, true, false));
+            long millisLeft = Math.max(0L, stun.releaseTime() - System.currentTimeMillis());
+            player.showTitle(Title.title(Component.text("기절 상태", NamedTextColor.GOLD), Component.text(formatDuration(millisLeft) + " 후 복귀", NamedTextColor.YELLOW)));
             player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 1f, 0.8f);
             return;
         }
@@ -402,8 +450,10 @@ public class GameManager implements Listener {
             int ticks = ticksUntilRelease(zombieDown);
             lockMovement(player, ticks);
             setZombieShield(player, true);
-            player.addPotionEffect(new PotionEffect(PotionEffectType.DAMAGE_RESISTANCE, ticks, 3, true, false));
-            player.showTitle(Title.title(Component.text("재정비 중", NamedTextColor.DARK_RED), Component.text("1분 뒤 다시 일어납니다", NamedTextColor.RED)));
+            int amplifier = settings.getBuffSettings().zombieRecoveryResistanceAmplifier();
+            player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, ticks, amplifier, true, false));
+            long millisLeft = Math.max(0L, zombieDown.releaseTime() - System.currentTimeMillis());
+            player.showTitle(Title.title(Component.text("재정비 중", NamedTextColor.DARK_RED), Component.text(formatDuration(millisLeft) + " 뒤 다시 일어납니다", NamedTextColor.RED)));
             player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.7f);
             return;
         }
@@ -628,7 +678,7 @@ public class GameManager implements Listener {
                 if (player != null && player.isOnline()) {
                     unlockMovement(player);
                     setZombieShield(player, false);
-                    player.removePotionEffect(PotionEffectType.DAMAGE_RESISTANCE);
+                    player.removePotionEffect(PotionEffectType.RESISTANCE);
                     player.sendMessage(ChatColor.DARK_RED + "재정비를 마치고 다시 움직일 수 있습니다!");
                     player.showTitle(Title.title(Component.text("재가동", NamedTextColor.DARK_RED), Component.text("본진으로 귀환하였습니다", NamedTextColor.GRAY)));
                     player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_INFECT, 1f, 0.9f);
@@ -658,28 +708,31 @@ public class GameManager implements Listener {
     }
 
     private void increaseGrowth() {
-        if (!running) {
+        if (!running || settings == null) {
             return;
         }
         growthLevel++;
-        Bukkit.broadcast(Component.text("⚡ 좀비 증강 단계 " + growthLevel + " 발동! 이동 속도와 공격력이 폭발적으로 증가합니다.", NamedTextColor.DARK_PURPLE));
+        ConfigSettings.GrowthSettings growth = settings.getGrowthSettings();
+        double perLevelSpeed = growth.speedPercentPerLevel();
+        double totalSpeed = perLevelSpeed * growthLevel;
+        double perLevelAttack = growth.attackDamagePerLevel();
+        double totalAttack = growth.attackBonus(growthLevel);
+        String breakdown = String.format(Locale.KOREA, "이속 +%.1f%% (누적 +%.1f%%) • 공격력 +%.2f (누적 +%.2f)",
+                perLevelSpeed, totalSpeed, perLevelAttack, totalAttack);
+        Bukkit.broadcast(Component.text("⚡ 좀비 증강 단계 " + growthLevel + " 발동! ", NamedTextColor.DARK_PURPLE)
+                .append(Component.text(breakdown, NamedTextColor.LIGHT_PURPLE)));
+        int strengthTicks = Math.max(20, growth.strengthDurationSeconds() * 20);
+        int strengthAmp = Math.max(0, growthLevel / growth.strengthAmplifierStep());
         for (PlayerProfile profile : profiles.values()) {
             Player player = profile.getPlayer();
             if (player == null || !player.isOnline()) {
                 continue;
             }
             if (profile.getRole().isZombie()) {
-                double baseSpeed = profile.getRole() == Role.HOST_ZOMBIE ? 0.125 : 0.11;
-                double boosted = baseSpeed * (1 + growthLevel * 0.05);
-                AttributeInstance movement = player.getAttribute(Attribute.MOVEMENT_SPEED);
-                if (movement != null) {
-                    movement.setBaseValue(boosted);
-                }
-                player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, 20 * 120, Math.max(0, growthLevel / 2), true, false));
-                player.showTitle(
-                        Title.title(Component.text("좀비 증강!", NamedTextColor.DARK_RED),
-                                Component.text("단계 " + growthLevel + " 공격 속도 상승", NamedTextColor.RED))
-                );
+                applyGrowthBuffs(profile);
+                player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, strengthTicks, strengthAmp, true, false));
+                Component subtitle = Component.text(String.format(Locale.KOREA, "Lv.%d ▶ 이속 +%.1f%% / 공 +%.2f", growthLevel, perLevelSpeed, perLevelAttack), NamedTextColor.RED);
+                player.showTitle(Title.title(Component.text("좀비 증강!", NamedTextColor.DARK_RED), subtitle));
                 player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.7f + 0.1f * growthLevel);
             } else {
                 player.showTitle(
@@ -689,12 +742,12 @@ public class GameManager implements Listener {
                 player.playSound(player.getLocation(), Sound.ENTITY_WARDEN_ROAR, 1f, 1.2f);
             }
         }
-        nextGrowthTimestamp = startTime + FIRST_GROWTH_DELAY + (long) growthLevel * GROWTH_INTERVAL;
+        nextGrowthTimestamp = System.currentTimeMillis() + growth.intervalMillis();
         firedGrowthReminders.clear();
     }
 
     private void checkGrowthReminders() {
-        if (!running || nextGrowthTimestamp <= 0) {
+        if (!running || nextGrowthTimestamp <= 0 || settings == null) {
             return;
         }
         long remaining = nextGrowthTimestamp - System.currentTimeMillis();
@@ -702,11 +755,15 @@ public class GameManager implements Listener {
             return;
         }
         int upcomingLevel = growthLevel + 1;
-        for (long window : GROWTH_REMINDER_WINDOWS) {
+        ConfigSettings.GrowthSettings growth = settings.getGrowthSettings();
+        double perLevelSpeed = growth.speedPercentPerLevel();
+        double perLevelAttack = growth.attackDamagePerLevel();
+        for (long window : growth.reminderWindowsMillis()) {
             if (remaining <= window && firedGrowthReminders.add(window)) {
                 String readable = formatDuration(Math.max(remaining, 0));
-                if (window >= Duration.ofMinutes(1).toMillis()) {
-                    Bukkit.broadcast(Component.text("⏰ 다음 증강까지 " + readable + " 남았습니다. (예정 단계 " + upcomingLevel + ")", NamedTextColor.LIGHT_PURPLE));
+                String detail = String.format(Locale.KOREA, "Lv.%d ▶ 이속 +%.1f%%, 공격력 +%.2f", upcomingLevel, perLevelSpeed, perLevelAttack);
+                if (window >= 60_000L) {
+                    Bukkit.broadcast(Component.text("⏰ 다음 증강까지 " + readable + " 남았습니다. " + detail, NamedTextColor.LIGHT_PURPLE));
                     playSoundToAll(Sound.BLOCK_NOTE_BLOCK_BELL, 0.8f, 1.2f);
                 } else {
                     for (PlayerProfile profile : profiles.values()) {
@@ -715,8 +772,8 @@ public class GameManager implements Listener {
                             continue;
                         }
                         Component subtitle = profile.getRole().isZombie()
-                                ? Component.text(readable + " 후 폭주!", NamedTextColor.RED)
-                                : Component.text(readable + " 후 위기!", NamedTextColor.GOLD);
+                                ? Component.text(readable + " 후 폭주 • " + detail, NamedTextColor.RED)
+                                : Component.text(readable + " 후 위기 • " + detail, NamedTextColor.GOLD);
                         player.showTitle(Title.title(Component.text("증강 임박", NamedTextColor.DARK_PURPLE), subtitle));
                         Sound cue = profile.getRole().isZombie() ? Sound.ENTITY_ZOMBIE_AMBIENT : Sound.BLOCK_NOTE_BLOCK_CHIME;
                         player.playSound(player.getLocation(), cue, 1f, profile.getRole().isZombie() ? 0.7f : 1.4f);
@@ -786,6 +843,25 @@ public class GameManager implements Listener {
         return (int) Math.max(20L, ticks);
     }
 
+    private void restartTrackerTask() {
+        if (trackerTask != null) {
+            trackerTask.cancel();
+        }
+        trackerTask = Bukkit.getScheduler().runTaskTimer(plugin, this::updateTracking, 0L, settings.getTrackingSettings().intervalTicks());
+    }
+
+    private void restartGrowthTask() {
+        if (growthTask != null) {
+            growthTask.cancel();
+        }
+        long now = System.currentTimeMillis();
+        long window = growthLevel == 0 ? settings.getGrowthSettings().firstDelayMillis() : settings.getGrowthSettings().intervalMillis();
+        long initialDelay = millisToTicks(Math.max(50L, window));
+        long interval = millisToTicks(settings.getGrowthSettings().intervalMillis());
+        growthTask = Bukkit.getScheduler().runTaskTimer(plugin, this::increaseGrowth, initialDelay, interval);
+        nextGrowthTimestamp = now + window;
+    }
+
     private String formatDuration(long elapsed) {
         Duration duration = Duration.ofMillis(elapsed);
         long minutes = duration.toMinutes();
@@ -793,13 +869,17 @@ public class GameManager implements Listener {
         return String.format(Locale.KOREA, "%02d:%02d", minutes, seconds);
     }
 
+    private long millisToTicks(long millis) {
+        long ticks = millis / 50L;
+        return Math.max(1L, ticks);
+    }
+
     private long getNextGrowthCountdown() {
-        if (!running) {
+        if (!running || nextGrowthTimestamp <= 0) {
             return 0L;
         }
-        long next = startTime + FIRST_GROWTH_DELAY + (long) growthLevel * GROWTH_INTERVAL;
         long now = System.currentTimeMillis();
-        return Math.max(0L, next - now);
+        return Math.max(0L, nextGrowthTimestamp - now);
     }
 
     private void updateTracking() {
@@ -861,7 +941,8 @@ public class GameManager implements Listener {
             target = player.getWorld().getSpawnLocation();
         }
         if (player != null && player.isOnline()) {
-            profile.applyAttributes();
+            profile.applyAttributes(settings);
+            applyGrowthBuffs(profile);
             player.setGameMode(GameMode.SURVIVAL);
             player.getInventory().remove(Material.COMPASS);
             player.getInventory().addItem(new ItemStack(Material.COMPASS));
@@ -953,29 +1034,36 @@ public class GameManager implements Listener {
     }
 
     private void applyStun(Player player) {
-        stunnedPlayers.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
-        player.sendMessage(ChatColor.YELLOW + "자연사로 인해 1분간 기절합니다. 자리를 지키고 부여된 버프로 생존하세요.");
-        player.showTitle(Title.title(Component.text("기절!", NamedTextColor.GOLD), Component.text("1분 동안 움직일 수 없습니다", NamedTextColor.YELLOW)));
+        long duration = settings.getTimers().stunMillis();
+        stunnedPlayers.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + duration));
+        String readable = formatDuration(duration);
+        player.sendMessage(ChatColor.YELLOW + "자연사로 인해 " + readable + " 동안 기절합니다. 자리를 지키고 부여된 버프로 생존하세요.");
+        player.showTitle(Title.title(Component.text("기절!", NamedTextColor.GOLD), Component.text(readable + " 후 복귀", NamedTextColor.YELLOW)));
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 1f, 0.8f);
     }
 
     private void queueZombieInfection(Player player, PlayerProfile profile) {
         UUID uuid = player.getUniqueId();
-        infections.put(uuid, new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
+        long duration = settings.getTimers().infectionMillis();
+        infections.put(uuid, new TimedMarker(player.getLocation(), System.currentTimeMillis() + duration));
         if (profile != null && profile.getRole() != Role.ZOMBIE) {
             profile.setRole(Role.ZOMBIE);
             syncTeams(profile);
-            profile.applyAttributes();
+            profile.applyAttributes(settings);
+            applyGrowthBuffs(profile);
         }
-        player.sendMessage(ChatColor.RED + "곧 감염됩니다. 60초 후 좀비로 부활합니다.");
-        player.showTitle(Title.title(Component.text("감염 진행", NamedTextColor.DARK_RED), Component.text("1분 뒤 좀비가 됩니다", NamedTextColor.RED)));
+        String readable = formatDuration(duration);
+        player.sendMessage(ChatColor.RED + "곧 감염됩니다. " + readable + " 후 좀비로 부활합니다.");
+        player.showTitle(Title.title(Component.text("감염 진행", NamedTextColor.DARK_RED), Component.text(readable + " 뒤 감염", NamedTextColor.RED)));
         player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.6f);
     }
 
     private void applyZombieDown(Player player) {
-        zombieRecoveries.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + 60_000));
-        player.sendMessage(ChatColor.DARK_RED + "좀비가 쓰러졌습니다. 1분 동안 재정비하며 피해를 받지 않습니다.");
-        player.showTitle(Title.title(Component.text("재정비 시작", NamedTextColor.DARK_RED), Component.text("60초 뒤 복귀", NamedTextColor.RED)));
+        long duration = settings.getTimers().zombieRecoveryMillis();
+        zombieRecoveries.put(player.getUniqueId(), new TimedMarker(player.getLocation(), System.currentTimeMillis() + duration));
+        String readable = formatDuration(duration);
+        player.sendMessage(ChatColor.DARK_RED + "좀비가 쓰러졌습니다. " + readable + " 동안 재정비하며 피해를 받지 않습니다.");
+        player.showTitle(Title.title(Component.text("재정비 시작", NamedTextColor.DARK_RED), Component.text(readable + " 뒤 복귀", NamedTextColor.RED)));
         player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.6f);
     }
 
@@ -1043,8 +1131,9 @@ public class GameManager implements Listener {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.setGameMode(GameMode.SURVIVAL);
                 lockMovement(player, ticksUntilRelease(stun));
-                player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 75, 1, true, false));
-                player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, 20 * 75, 0, true, false));
+                ConfigSettings.BuffSettings buff = settings.getBuffSettings();
+                player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * buff.stunFireResistanceSeconds(), 1, true, false));
+                player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, 20 * buff.stunWaterBreathingSeconds(), 0, true, false));
             });
         } else if (zombieDown != null) {
             event.setRespawnLocation(zombieDown.location());
@@ -1053,8 +1142,10 @@ public class GameManager implements Listener {
                 int ticks = ticksUntilRelease(zombieDown);
                 lockMovement(player, ticks);
                 setZombieShield(player, true);
-                player.addPotionEffect(new PotionEffect(PotionEffectType.DAMAGE_RESISTANCE, ticks, 3, true, false));
-                player.showTitle(Title.title(Component.text("재정비 진행", NamedTextColor.DARK_RED), Component.text("곧 다시 일어납니다", NamedTextColor.RED)));
+                int amplifier = settings.getBuffSettings().zombieRecoveryResistanceAmplifier();
+                player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, ticks, amplifier, true, false));
+                long millisLeft = Math.max(0L, zombieDown.releaseTime() - System.currentTimeMillis());
+                player.showTitle(Title.title(Component.text("재정비 진행", NamedTextColor.DARK_RED), Component.text(formatDuration(millisLeft) + " 뒤 다시 일어납니다", NamedTextColor.RED)));
                 player.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1f, 0.7f);
             });
         } else if (zeroZero != null) {
@@ -1101,8 +1192,10 @@ public class GameManager implements Listener {
         if (profile != null) {
             profile.detachPlayer();
             Location returnPoint = event.getPlayer().getLocation();
-            rejoinGrace.put(uuid, new TimedMarker(returnPoint, System.currentTimeMillis() + 60_000));
-            Bukkit.broadcast(Component.text(profile.getLastKnownName() + " 님이 잠시 퇴장했습니다. 60초 안에 복귀하지 않으면 탈락합니다.", NamedTextColor.GRAY));
+            long grace = settings.getTimers().rejoinGraceMillis();
+            rejoinGrace.put(uuid, new TimedMarker(returnPoint, System.currentTimeMillis() + grace));
+            String readable = formatDuration(grace);
+            Bukkit.broadcast(Component.text(profile.getLastKnownName() + " 님이 잠시 퇴장했습니다. " + readable + " 안에 복귀하지 않으면 탈락합니다.", NamedTextColor.GRAY));
         }
     }
 

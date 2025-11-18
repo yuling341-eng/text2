@@ -5,14 +5,17 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public class ZombieTagPlugin extends JavaPlugin {
     private GameManager gameManager;
+    private ConfigSettings settings;
 
     @Override
     public void onEnable() {
-        this.gameManager = new GameManager(this);
+        saveDefaultConfig();
+        settings = new ConfigSettings(getConfig());
+        this.gameManager = new GameManager(this, settings);
         getServer().getPluginManager().registerEvents(gameManager, this);
         PluginCommand command = getCommand("zombietag");
         if (command != null) {
-            ZombieTagCommand executor = new ZombieTagCommand(gameManager);
+            ZombieTagCommand executor = new ZombieTagCommand(this, gameManager);
             command.setExecutor(executor);
             command.setTabCompleter(executor);
         }
@@ -21,7 +24,21 @@ public class ZombieTagPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        gameManager.stopGame("게임이 종료되었습니다.");
+        if (gameManager != null) {
+            gameManager.stopGame("게임이 종료되었습니다.");
+        }
         getLogger().info("ZombieTag plugin disabled");
+    }
+
+    public void reloadPluginSettings() {
+        reloadConfig();
+        settings = new ConfigSettings(getConfig());
+        if (gameManager != null) {
+            gameManager.updateSettings(settings);
+        }
+    }
+
+    public ConfigSettings getSettings() {
+        return settings;
     }
 }

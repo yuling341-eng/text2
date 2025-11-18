@@ -1,0 +1,54 @@
+# 기본 진행 규칙
+# 모든 값은 관리자 필요에 따라 조절 가능합니다.
+gameplay:
+  host-ratio: 0.2                 # 숙주 좀비 비율 (최소 1명 유지)
+  scatter-radius: 1000            # 생존자 산개 반경 (블록)
+  host-release-delay-seconds: 300 # 숙주가 눈을 뜨기까지 대기 시간
+
+# 각종 상태 지속 시간 (초)
+timers:
+  stun-seconds: 60
+  infection-seconds: 60
+  zombie-recovery-seconds: 60
+  rejoin-grace-seconds: 60
+
+# 보호 버프 길이 및 증폭치
+protection:
+  scatter-resistance-seconds: 10
+  scatter-resistance-amplifier: 3
+  stun-fire-resistance-seconds: 75
+  stun-water-breathing-seconds: 75
+  zombie-recovery-resistance-amplifier: 3
+
+tracking:
+  interval-ticks: 10
+
+# 증강 주기 및 상승 폭
+growth:
+  first-delay-minutes: 30
+  interval-minutes: 15
+  speed-percent-per-level: 5.0
+  attack-damage-per-level: 0.5
+  strength-duration-seconds: 120
+  strength-amplifier-step: 2
+  reminder-seconds:
+    - 600
+    - 300
+    - 60
+    - 30
+    - 10
+
+# 역할별 기본 스탯
+roles:
+  survivor:
+    max-health: 20.0
+    movement-speed: 0.1
+    attack-damage: 4.0
+  host-zombie:
+    max-health: 40.0
+    movement-speed: 0.125
+    attack-damage: 4.0
+  zombie:
+    max-health: 10.0
+    movement-speed: 0.11
+    attack-damage: 2.0

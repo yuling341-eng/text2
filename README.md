@@ -11,6 +11,7 @@ Paper 1.21.4 mini-game 플러그인으로, 요청한 고퀄리티 좀비 술래�
 - **사망 처리 리워크**: 생존자는 자연사 시 1분 기절(불/물 저항) 또는 감염 대기, 좀비/숙주도 사망 위치에서 1분간 재정비하며 무적이라 연속 처치가 불가능합니다.
 - **관전·복귀 품질 향상**: 라운드 중 입장자는 자동 관전, 기존 참가자는 1분 유예 내 재접속 시 모든 버프/디버프·위치를 그대로 복구합니다.
 - **승리 조건**: 생존자는 엔더 드래곤 처치, 좀비는 생존자를 전원 감염시키면 승리합니다.
+- **config.yml 전체 제어**: `gameplay`, `timers`, `protection`, `growth`, `roles` 섹션으로 산개 반경, 숙주 비율, 감염 대기/재정비 시간, 증강 폭까지 전부 커스터마이징할 수 있습니다. 라운드 중 `/zombietag reload`로 즉시 반영됩니다.
 
 ## 빌드
 ```bash
@@ -24,3 +25,16 @@ mvn package
 | `/zombietag start` | 게임을 초기화하고 시작합니다. | `zombietag.admin` |
 | `/zombietag stop` | 진행 중인 게임을 종료합니다. | `zombietag.admin` |
 | `/zombietag status` | 현재 진행 상태를 확인합니다. | 누구나 |
+| `/zombietag reload` | `config.yml`을 다시 불러오고 즉시 적용합니다. | `zombietag.admin` |
+
+### 설정
+
+`plugins/ZombieTag/config.yml`에서 다음 요소를 세밀하게 조정할 수 있습니다.
+
+- `gameplay`: 숙주 비율, 산개 반경, 숙주 각성 지연
+- `timers`: 기절/감염/재정비/재접속 유예 시간
+- `protection`: 버프 지속 시간 및 증폭치
+- `growth`: 증강 간격, 이동속도/공격력 증가폭, 알림 타이밍
+- `roles`: 생존자·좀비·숙주의 최대 체력, 이동속도, 공격력
+
+변경 후 `/zombietag reload` 또는 서버 리로드로 즉시 적용됩니다.

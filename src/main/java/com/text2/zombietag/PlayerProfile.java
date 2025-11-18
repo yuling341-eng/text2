@@ -48,33 +48,26 @@ public class PlayerProfile {
         this.role = role;
     }
 
-    public void applyAttributes() {
+    public void applyAttributes(ConfigSettings settings) {
         if (player == null || !player.isOnline()) {
             return;
         }
-        switch (role) {
-            case SURVIVOR -> apply(20.0, 0.1, 4.0);
-            case HOST_ZOMBIE -> apply(40.0, 0.125, 9.0);
-            case ZOMBIE -> apply(10.0, 0.11, 6.0);
-        }
-    }
-
-    private void apply(double health, double speed, double attackDamage) {
-        if (player == null) {
+        ConfigSettings.RoleStats stats = settings.getRoleStats(role);
+        if (stats == null) {
             return;
         }
         AttributeInstance maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
         if (maxHealth != null) {
-            maxHealth.setBaseValue(health);
+            maxHealth.setBaseValue(stats.maxHealth());
         }
-        player.setHealth(health);
+        player.setHealth(stats.maxHealth());
         AttributeInstance movement = player.getAttribute(Attribute.MOVEMENT_SPEED);
         if (movement != null) {
-            movement.setBaseValue(speed);
+            movement.setBaseValue(stats.movementSpeed());
         }
         AttributeInstance attack = player.getAttribute(Attribute.ATTACK_DAMAGE);
         if (attack != null) {
-            attack.setBaseValue(attackDamage);
+            attack.setBaseValue(stats.attackDamage());
         }
     }
 }
