@@ -34,6 +34,7 @@ import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.CompassMeta;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
@@ -94,8 +95,7 @@ public class GameManager implements Listener {
     public void updateSettings(ConfigSettings newSettings) {
         this.settings = newSettings;
         for (PlayerProfile profile : profiles.values()) {
-            profile.applyAttributes(settings);
-            applyGrowthBuffs(profile);
+            refreshRoleAttributes(profile);
         }
         if (running) {
             restartTrackerTask();
@@ -232,8 +232,7 @@ public class GameManager implements Listener {
     private void registerPlayer(Player player, Role role) {
         PlayerProfile profile = new PlayerProfile(player, role);
         profiles.put(player.getUniqueId(), profile);
-        profile.applyAttributes(settings);
-        applyGrowthBuffs(profile);
+        refreshRoleAttributes(profile);
         player.setFoodLevel(20);
         player.setSaturation(20);
         player.setWalkSpeed(0.2f);
@@ -284,8 +283,7 @@ public class GameManager implements Listener {
         player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, 20 * 120, 1, true, false));
         PlayerProfile profile = profiles.get(player.getUniqueId());
         if (profile != null) {
-            profile.applyAttributes(settings);
-            applyGrowthBuffs(profile);
+            refreshRoleAttributes(profile);
         }
         player.showTitle(Title.title(Component.text("사냥 시작!", NamedTextColor.DARK_RED), Component.text("생존자를 추적하세요", NamedTextColor.RED)));
         player.playSound(player.getLocation(), Sound.ENTITY_WITHER_SPAWN, 1f, 0.5f);
@@ -321,6 +319,14 @@ public class GameManager implements Listener {
         if (bossBar != null && !bossBar.getPlayers().contains(player)) {
             bossBar.addPlayer(player);
         }
+    }
+
+    private void refreshRoleAttributes(PlayerProfile profile) {
+        if (profile == null || settings == null) {
+            return;
+        }
+        profile.applyAttributes(settings);
+        applyGrowthBuffs(profile);
     }
 
     private void applyGrowthBuffs(PlayerProfile profile) {
@@ -386,8 +392,7 @@ public class GameManager implements Listener {
         player.setWalkSpeed(0.2f);
         attachHud(player);
         syncTeams(profile);
-        profile.applyAttributes(settings);
-        applyGrowthBuffs(profile);
+        refreshRoleAttributes(profile);
         player.getInventory().remove(Material.COMPASS);
         if (profile.getRole().isZombie()) {
             player.getInventory().addItem(new ItemStack(Material.COMPASS));
@@ -684,10 +689,7 @@ public class GameManager implements Listener {
                     setZombieShield(player, false);
                     player.removePotionEffect(PotionEffectType.RESISTANCE);
                     PlayerProfile profile = profiles.get(entry.getKey());
-                    if (profile != null && settings != null) {
-                        profile.applyAttributes(settings);
-                        applyGrowthBuffs(profile);
-                    }
+                    refreshRoleAttributes(profile);
                     grantSpawnProtection(player);
                     player.sendMessage(ChatColor.DARK_RED + "재정비를 마치고 다시 움직일 수 있습니다!");
                     player.showTitle(Title.title(Component.text("재가동", NamedTextColor.DARK_RED), Component.text("본진으로 귀환하였습니다", NamedTextColor.GRAY)));
@@ -940,16 +942,50 @@ public class GameManager implements Listener {
                     .orElse(null);
             if (nearest != null) {
                 UUID targetId = nearest.getUniqueId();
-                Location targetLocation = nearest.getLocation();
+                Location targetLocation = nearest.getLocation().clone();
                 if (!Objects.equals(lastTrackedTargets.get(uuid), targetId)) {
                     lastTrackedTargets.put(uuid, targetId);
                     zombie.playSound(zombieLocation, Sound.UI_LOOM_TAKE_RESULT, 0.6f, 1.6f);
                     zombie.sendMessage(ChatColor.DARK_RED + "새로운 추적 대상: " + ChatColor.RED + nearest.getName());
                 }
-                zombie.setCompassTarget(targetLocation);
+                retargetCompass(zombie, targetLocation);
                 int distance = (int) Math.round(zombieLocation.distance(targetLocation));
                 zombie.sendActionBar(Component.text("📡 " + nearest.getName() + " 까지 " + distance + "m", NamedTextColor.RED));
             }
+        }
+    }
+
+    private void retargetCompass(Player zombie, Location targetLocation) {
+        if (targetLocation == null) {
+            return;
+        }
+        if (zombie.getWorld().equals(targetLocation.getWorld())) {
+            zombie.setCompassTarget(targetLocation);
+        }
+        boolean updated = false;
+        ItemStack[] contents = zombie.getInventory().getContents();
+        for (ItemStack stack : contents) {
+            if (stack == null || stack.getType() != Material.COMPASS) {
+                continue;
+            }
+            CompassMeta meta = (CompassMeta) stack.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            meta.setLodestoneTracked(false);
+            meta.setLodestone(targetLocation);
+            stack.setItemMeta(meta);
+            updated = true;
+        }
+        if (!updated) {
+            ItemStack compass = new ItemStack(Material.COMPASS);
+            CompassMeta meta = (CompassMeta) compass.getItemMeta();
+            if (meta != null) {
+                meta.setLodestoneTracked(false);
+                meta.setLodestone(targetLocation);
+                compass.setItemMeta(meta);
+            }
+            zombie.getInventory().addItem(compass);
         }
     }
 
@@ -966,8 +1002,7 @@ public class GameManager implements Listener {
             target = player.getWorld().getSpawnLocation();
         }
         if (player != null && player.isOnline()) {
-            profile.applyAttributes(settings);
-            applyGrowthBuffs(profile);
+            refreshRoleAttributes(profile);
             player.setGameMode(GameMode.SURVIVAL);
             player.getInventory().remove(Material.COMPASS);
             player.getInventory().addItem(new ItemStack(Material.COMPASS));
@@ -1098,8 +1133,7 @@ public class GameManager implements Listener {
         if (profile != null && profile.getRole() != Role.ZOMBIE) {
             profile.setRole(Role.ZOMBIE);
             syncTeams(profile);
-            profile.applyAttributes(settings);
-            applyGrowthBuffs(profile);
+            refreshRoleAttributes(profile);
         }
         String readable = formatDuration(duration);
         player.sendMessage(ChatColor.RED + "곧 감염됩니다. " + readable + " 후 좀비로 부활합니다.");
