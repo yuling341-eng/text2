@@ -19,6 +19,8 @@ protection:
   stun-fire-resistance-seconds: 75
   stun-water-breathing-seconds: 75
   zombie-recovery-resistance-amplifier: 3
+  spawn-fire-resistance-seconds: 30
+  spawn-water-breathing-seconds: 30
 
 tracking:
   interval-ticks: 10

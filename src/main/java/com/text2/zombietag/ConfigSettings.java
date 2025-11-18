@@ -31,7 +31,9 @@ public class ConfigSettings {
                                int scatterResistanceAmplifier,
                                int stunFireResistanceSeconds,
                                int stunWaterBreathingSeconds,
-                               int zombieRecoveryResistanceAmplifier) {
+                               int zombieRecoveryResistanceAmplifier,
+                               int spawnFireResistanceSeconds,
+                               int spawnWaterBreathingSeconds) {
     }
 
     public record Timers(long stunMillis, long infectionMillis, long zombieRecoveryMillis, long rejoinGraceMillis) {
@@ -64,7 +66,9 @@ public class ConfigSettings {
                 config.getInt("protection.scatter-resistance-amplifier", 3),
                 config.getInt("protection.stun-fire-resistance-seconds", 75),
                 config.getInt("protection.stun-water-breathing-seconds", 75),
-                config.getInt("protection.zombie-recovery-resistance-amplifier", 3)
+                config.getInt("protection.zombie-recovery-resistance-amplifier", 3),
+                config.getInt("protection.spawn-fire-resistance-seconds", 30),
+                config.getInt("protection.spawn-water-breathing-seconds", 30)
         );
         this.trackingSettings = new TrackingSettings(Math.max(1, config.getInt("tracking.interval-ticks", 10)));
         this.growthSettings = new GrowthSettings(

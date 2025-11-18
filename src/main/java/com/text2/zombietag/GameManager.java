@@ -688,6 +688,7 @@ public class GameManager implements Listener {
                         profile.applyAttributes(settings);
                         applyGrowthBuffs(profile);
                     }
+                    grantSpawnProtection(player);
                     player.sendMessage(ChatColor.DARK_RED + "재정비를 마치고 다시 움직일 수 있습니다!");
                     player.showTitle(Title.title(Component.text("재가동", NamedTextColor.DARK_RED), Component.text("본진으로 귀환하였습니다", NamedTextColor.GRAY)));
                     player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_INFECT, 1f, 0.9f);
@@ -831,6 +832,21 @@ public class GameManager implements Listener {
         }
     }
 
+    private void grantSpawnProtection(Player player) {
+        if (player == null || settings == null) {
+            return;
+        }
+        ConfigSettings.BuffSettings buff = settings.getBuffSettings();
+        int fireSeconds = Math.max(0, buff.spawnFireResistanceSeconds());
+        int waterSeconds = Math.max(0, buff.spawnWaterBreathingSeconds());
+        if (fireSeconds > 0) {
+            player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, fireSeconds * 20, 1, true, false));
+        }
+        if (waterSeconds > 0) {
+            player.addPotionEffect(new PotionEffect(PotionEffectType.WATER_BREATHING, waterSeconds * 20, 0, true, false));
+        }
+    }
+
     private void lockMovement(Player player, int durationTicks) {
         player.setWalkSpeed(0f);
         player.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, durationTicks, 10, true, false, false));
@@ -958,6 +974,7 @@ public class GameManager implements Listener {
             if (target != null) {
                 player.teleport(target);
             }
+            grantSpawnProtection(player);
             player.addPotionEffect(new PotionEffect(PotionEffectType.HUNGER, 20 * 3, 1, true, false));
             player.showTitle(Title.title(Component.text("감염!", NamedTextColor.RED), Component.text("좀비 진영으로 합류", NamedTextColor.DARK_RED)));
             player.playSound(player.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1f, 0.6f);
